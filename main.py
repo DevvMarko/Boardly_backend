@@ -154,4 +154,19 @@ def delete_task(task_id):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    import argparse
+    parser = argparse.ArgumentParser(description="Run the backend server.")
+    parser.add_argument('--dev', action='store_true', help='Run in development mode')
+    args = parser.parse_args()
+
+    if args.dev:
+        print("Starting development server...")
+        app.run(debug=True)
+    else:
+        print("Starting production server with Waitress...")
+        try:
+            from waitress import serve
+            serve(app, host='0.0.0.0', port=5000)
+        except ImportError:
+            print("Waitress is not installed. Falling back to development server...")
+            app.run()
