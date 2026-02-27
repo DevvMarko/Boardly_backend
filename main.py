@@ -3,11 +3,15 @@ from flask_sqlalchemy import SQLAlchemy
 import os
 import psycopg2
 from dotenv import load_dotenv
+from flask_cors import CORS
+import string
+import random
 
 load_dotenv()
 
 # init flask
 app = Flask(__name__)
+CORS(app)
 
 # configure connection to database
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
@@ -42,35 +46,43 @@ class Boards(db.Model):
     board_id = db.Column(db.Integer, primary_key=True)
     board_name = db.Column(db.String(255))
     board_description = db.Column(db.String(255))
+    board_code = db.Column(db.String(4))
 
     def to_dict(self):
         return {
             "board_id": self.board_id,
             "board_name": self.board_name,
-            "board_description": self.board_description
+            "board_description": self.board_description,
+            "board_code": self.board_code
         }
 
+def generate_board_code():
+    while True:
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        if not Boards.query.filter_by(board_code=code).first():
+            return code
 
-# get tasks by board id
-@app.route('/api/boards/<int:board_id>', methods=['GET'])
-def get_board_data(board_id):
+# get tasks by board code
+@app.route('/api/boards/<string:board_code>', methods=['GET'])
+def get_board_data(board_code):
     # Query for the board and its tasks
     # We join them to ensure the board exists and to get board details
     results = db.session.query(
         Boards.board_id,
         Boards.board_name,
         Boards.board_description,
+        Boards.board_code,
         Tasks.task_id,
         Tasks.task_name,
         Tasks.task_description,
         Tasks.task_icon,
         Tasks.task_status
-    ).join(Boards, Tasks.board_id == Boards.board_id).filter(Tasks.board_id == board_id).all()
+    ).outerjoin(Tasks, Tasks.board_id == Boards.board_id).filter(Boards.board_code == board_code).all()
 
     if not results:
         # If no tasks found, maybe the board exists but is empty? 
         # Or the board doesn't exist. Let's check for the board specifically.
-        board = Boards.query.get(board_id)
+        board = Boards.query.filter_by(board_code=board_code).first()
         if not board:
             return jsonify({"error": "Board not found"}), 404
         
@@ -86,7 +98,12 @@ def get_board_data(board_id):
         "board_id": first_row.board_id,
         "board_name": first_row.board_name,
         "board_description": first_row.board_description,
-        "tasks": [
+        "board_code": first_row.board_code,
+        "tasks": []
+    }
+
+    if first_row.task_id is not None:
+        data["tasks"] = [
             {
                 "task_id": r.task_id,
                 "task_name": r.task_name,
@@ -96,14 +113,13 @@ def get_board_data(board_id):
             }
             for r in results
         ]
-    }
 
     return jsonify(data)
 
 # update board data
-@app.route('/api/boards/<int:board_id>', methods=['PUT'])
-def update_board_data(board_id):
-    board = Boards.query.get(board_id)
+@app.route('/api/boards/<string:board_code>', methods=['PUT'])
+def update_board_data(board_code):
+    board = Boards.query.filter_by(board_code=board_code).first()
     if not board:
         return jsonify({"error": "Board not found"}), 404
     data = request.json
@@ -114,11 +130,21 @@ def update_board_data(board_id):
 
 # create new board
 @app.route('/api/boards', methods=['POST'])
+def create_board():
+    data = request.json
+    new_board = Boards(
+        board_name=data.get('board_name'),
+        board_description=data.get('board_description'),
+        board_code=generate_board_code()
+    )
+    db.session.add(new_board)
+    db.session.commit()
+    return jsonify(new_board.to_dict()), 201
 
 #delete board
-@app.route('/api/boards/<int:board_id>', methods=['DELETE'])
-def delete_board(board_id):
-    board = Boards.query.get(board_id)
+@app.route('/api/boards/<string:board_code>', methods=['DELETE'])
+def delete_board(board_code):
+    board = Boards.query.filter_by(board_code=board_code).first()
     if not board:
         return jsonify({"error": "Board not found"}), 404
     db.session.delete(board)
@@ -126,7 +152,23 @@ def delete_board(board_id):
     return jsonify(board.to_dict())
 
 # create new task
-@app.route('/api/boards/<int:board_id>', methods=['POST'])
+@app.route('/api/boards/<string:board_code>', methods=['POST'])
+def create_task(board_code):
+    board = Boards.query.filter_by(board_code=board_code).first()
+    if not board:
+        return jsonify({"error": "Board not found"}), 404
+        
+    data = request.json
+    new_task = Tasks(
+        task_name=data.get('task_name'),
+        task_description=data.get('task_description'),
+        task_icon=data.get('task_icon'),
+        task_status=data.get('task_status', 'To Do'),
+        board_id=board.board_id
+    )
+    db.session.add(new_task)
+    db.session.commit()
+    return jsonify(new_task.to_dict()), 201
 
 # update task
 @app.route('/api/tasks/<int:task_id>', methods=['PUT'])
